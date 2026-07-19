@@ -1,55 +1,85 @@
-// Icon SVG tải xuống
 const downloadIcon = `<svg viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>`;
 
-/**
- * Hàm tạo và chèn nút Download vào video container
- * @param {HTMLElement} videoElement - Thẻ <video> bắt được trên DOM
- */
+// Hàm tìm Tweet ID từ DOM
+function getTweetId(videoElement) {
+  try {
+    // Tìm thẻ <article> bọc ngoài cùng của một bài viết trên X
+    const article = videoElement.closest('article');
+    if (!article) return null;
+
+    // Tìm thẻ <a> chứa đường dẫn thời gian của bài viết (vd: /username/status/123456789)
+    const timeLink = article.querySelector('a[href*="/status/"]');
+    if (timeLink) {
+      const urlMatches = timeLink.href.match(/\/status\/(\d+)/);
+      if (urlMatches && urlMatches.length > 1) {
+        return urlMatches[1]; // Trả về dãy số ID
+      }
+    }
+  } catch (e) {
+    console.error("Lỗi khi quét Tweet ID", e);
+  }
+  return null;
+}
+
 function injectDownloadButton(videoElement) {
-  // Twitter bọc video trong một cấu trúc phức tạp.
-  // Ta tìm element cha chứa video để làm mốc gắn overlay.
   const container = videoElement.closest('[data-testid="videoComponent"]') || videoElement.parentElement;
   
-  // Tránh việc chèn nút nhiều lần vào cùng một video
   if (!container || container.querySelector('.x-vd-overlay-container')) return;
 
-  // Đảm bảo container cha có thuộc tính relative để nút absolute canh đúng vị trí
   const computedStyle = window.getComputedStyle(container);
   if (computedStyle.position === 'static') {
     container.style.position = 'relative';
   }
 
-  // Khởi tạo cụm nút UI
   const btnContainer = document.createElement('div');
   btnContainer.className = 'x-vd-overlay-container';
 
   const downloadBtn = document.createElement('button');
   downloadBtn.className = 'x-vd-download-btn';
-  downloadBtn.innerHTML = `${downloadIcon} Tải xuống`;
+  downloadBtn.innerHTML = `${downloadIcon} Tải bằng IDM`;
   
-  // Xử lý sự kiện click tải video
   downloadBtn.addEventListener('click', (e) => {
     e.preventDefault();
-    e.stopPropagation(); // Ngăn chặn Twitter xử lý click (play/pause video)
-    
-    // Thay đổi UI tạm thời báo hiệu đang xử lý
-    downloadBtn.innerHTML = `Đang bắt link...`;
+    e.stopPropagation();
+
+    // 1. Quét lấy Tweet ID
+    const tweetId = getTweetId(videoElement);
+    if (!tweetId) {
+      alert("Không nhận diện được ID của bài viết này!");
+      return;
+    }
+
+    downloadBtn.innerHTML = `Đang trích xuất...`;
     downloadBtn.style.opacity = '0.7';
 
-    // Gửi tín hiệu về Background Script để lấy link và tải
-    chrome.runtime.sendMessage({ action: "REQUEST_DOWNLOAD" }, (response) => {
+    // 2. Gửi ID lên Background để nhờ API tìm link gốc
+    chrome.runtime.sendMessage({ 
+      action: "FETCH_VIDEO_API",
+      tweetId: tweetId
+    }, (response) => {
       if (response && response.status === "success") {
-        downloadBtn.innerHTML = `${downloadIcon} Đã tải`;
-        downloadBtn.style.backgroundColor = '#17bf63'; // Đổi sang màu xanh lá
+        downloadBtn.innerHTML = `${downloadIcon} Đang mở IDM`;
+        downloadBtn.style.backgroundColor = '#17bf63';
+
+        // 3. THỦ THUẬT KÍCH HOẠT IDM TỪ LINK TRỰC TIẾP
+        // Khi đã có link nguyên bản (không phải luồng HLS), ta dùng thẻ <a> tàng hình là chuẩn nhất
+        const a = document.createElement('a');
+        a.href = response.url;
+        a.download = response.filename;
+        a.target = '_blank'; // Ép mở luồng tải mới để IDM can thiệp
+        a.style.display = 'none';
+        
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+
       } else {
-        downloadBtn.innerHTML = `Lỗi: Không tìm thấy link`;
-        downloadBtn.style.backgroundColor = '#e0245e'; // Đổi sang màu đỏ
-        alert("Chưa bắt được luồng video. Hãy thử cho video chạy vài giây rồi bấm lại.");
+        downloadBtn.innerHTML = `Lỗi: Không lấy được link`;
+        downloadBtn.style.backgroundColor = '#e0245e';
       }
       
-      // Trả lại UI cũ sau 3 giây
       setTimeout(() => {
-        downloadBtn.innerHTML = `${downloadIcon} Tải xuống`;
+        downloadBtn.innerHTML = `${downloadIcon} Tải bằng IDM`;
         downloadBtn.style.backgroundColor = '';
         downloadBtn.style.opacity = '1';
       }, 3000);
@@ -60,32 +90,17 @@ function injectDownloadButton(videoElement) {
   container.appendChild(btnContainer);
 }
 
-/**
- * Sử dụng MutationObserver để lắng nghe sự kiện cuộn (scroll)
- * và DOM render của Single Page Application
- */
 const observer = new MutationObserver((mutations) => {
   mutations.forEach((mutation) => {
-    // Chỉ xử lý khi có node mới được thêm vào
     if (mutation.addedNodes.length > 0) {
-      // Tìm tất cả các thẻ video mới sinh ra
       const newVideos = document.querySelectorAll('video');
-      newVideos.forEach(video => {
-        injectDownloadButton(video);
-      });
+      newVideos.forEach(video => injectDownloadButton(video));
     }
   });
 });
 
-// Bắt đầu quét toàn bộ thay đổi của thẻ <body>
-observer.observe(document.body, {
-  childList: true,
-  subtree: true
-});
+observer.observe(document.body, { childList: true, subtree: true });
 
-// Chạy lần đầu tiên cho các video đã có sẵn khi trang vừa load xong
 setTimeout(() => {
-  document.querySelectorAll('video').forEach(video => {
-    injectDownloadButton(video);
-  });
+  document.querySelectorAll('video').forEach(video => injectDownloadButton(video));
 }, 2000);

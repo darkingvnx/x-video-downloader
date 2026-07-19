@@ -1,57 +1,35 @@
-// Bộ nhớ đệm lưu trữ các URL video bắt được
-// Trong môi trường MV3 thực tế lớn hơn, có thể dùng chrome.storage.session để tránh bị xóa khi SW ngủ
-let capturedMedia = new Map();
-
-// Lắng nghe các request tải video
-chrome.webRequest.onBeforeRequest.addListener(
-  (details) => {
-    const url = details.url;
-    // Lọc các luồng video thực tế từ server của Twitter
-    if (url.includes("video.twimg.com")) {
-      if (url.includes(".mp4") || url.includes(".m3u8")) {
-        // Sử dụng ID của tab để map video với tab đang hoạt động
-        const tabId = details.tabId;
-        if (tabId !== -1) {
-          if (!capturedMedia.has(tabId)) {
-            capturedMedia.set(tabId, new Set());
-          }
-          capturedMedia.get(tabId).add(url);
-        }
-      }
-    }
-  },
-  { urls: ["*://video.twimg.com/*"] }
-);
-
-// Lắng nghe tin nhắn từ Content Script (khi người dùng bấm nút Download)
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.action === "REQUEST_DOWNLOAD") {
-    const tabId = sender.tab.id;
-    const mediaUrls = capturedMedia.get(tabId) ? Array.from(capturedMedia.get(tabId)) : [];
-    
-    if (mediaUrls.length > 0) {
-      // Ưu tiên file .mp4 thay vì .m3u8 (vì m3u8 là playlist, khó tải nguyên khối trên trình duyệt)
-      const mp4Urls = mediaUrls.filter(url => url.includes(".mp4"));
-      const targetUrl = mp4Urls.length > 0 ? mp4Urls[mp4Urls.length - 1] : mediaUrls[mediaUrls.length - 1];
+  if (request.action === "FETCH_VIDEO_API") {
+    const tweetId = request.tweetId;
+    const apiUrl = `https://api.vxtwitter.com/Twitter/status/${tweetId}`;
 
-      // Kích hoạt API tải xuống của Chrome
-      chrome.downloads.download({
-        url: targetUrl,
-        filename: `X_Video_${Date.now()}.mp4`,
-        saveAs: false
+    // Gọi API để lấy dữ liệu gốc của Tweet
+    fetch(apiUrl)
+      .then(response => response.json())
+      .then(data => {
+        // Kiểm tra xem bài viết có chứa media (video) không
+        if (data && data.media_extended && data.media_extended.length > 0) {
+          const media = data.media_extended[0];
+          
+          if (media.type === 'video' || media.type === 'gif') {
+            const size = media.size; // Kích thước độ phân giải vd: {width: 1280, height: 720}
+            const url = media.url;   // ĐÂY CHÍNH LÀ LINK .MP4 NGUYÊN BẢN CHẤT LƯỢNG CAO!
+
+            sendResponse({ 
+              status: "success", 
+              url: url,
+              filename: `X_Video_${tweetId}_${size.width}x${size.height}.mp4`
+            });
+            return;
+          }
+        }
+        sendResponse({ status: "not_found", message: "Không tìm thấy video trong bài viết này." });
+      })
+      .catch(error => {
+        console.error("API Error:", error);
+        sendResponse({ status: "error", message: "Lỗi kết nối API." });
       });
-      
-      sendResponse({ status: "success", url: targetUrl });
-    } else {
-      sendResponse({ status: "not_found" });
-    }
-  }
-  return true; // Giữ cổng kết nối mở cho async response
-});
 
-// Dọn dẹp bộ nhớ khi đóng tab
-chrome.tabs.onRemoved.addListener((tabId) => {
-  if (capturedMedia.has(tabId)) {
-    capturedMedia.delete(tabId);
+    return true; // Giữ cổng kết nối mở để chờ fetch API xử lý xong
   }
 });
