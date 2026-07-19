@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "X (Twitter) Video Downloader Pro",
+  "version": "1.0",
+  "description": "Tự động bắt link và chèn nút tải video chất lượng cao trên X/Twitter.",
+  "permissions": [
+    "webRequest",
+    "downloads",
+    "storage"
+  ],
+  "host_permissions": [
+    "*://*.twitter.com/*",
+    "*://*.x.com/*",
+    "*://*.twimg.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://twitter.com/*",
+        "*://x.com/*"
+      ],
+      "css": ["style.css"],
+      "js": ["content.js"],
+      "run_at": "document_end"
+    }
+  ]
+}
